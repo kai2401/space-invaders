@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Canvas Ship</title>
+  <style>
+    body {
+      display: grid;
+      min-height: 100vh;
+      margin: 0;
+      place-items: center;
+      background: #000;
+    }
+
+    .game-container {
+      position: relative;
+      width: 100%;
+      height: auto;
+      aspect-ratio: 4 / 3;
+    }
+
+    .page {
+      width: min(800px, 100vw, calc((100vh - 40px) * 4 / 3));
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .credit {
+      margin-top: 8px;
+      color: #fff;
+      font: 14px monospace;
+      text-align: right;
+    }
+
+    .game-over {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      background: rgba(0, 0, 0, 0.82);
+      color: #fff;
+      font-family: monospace;
+      text-align: center;
+    }
+
+    .game-over[hidden] {
+      display: none;
+    }
+
+    .game-over-panel h1 {
+      margin: 0 0 16px;
+      font-size: 40px;
+    }
+
+    .game-over-panel p {
+      margin: 0 0 24px;
+      font-size: 20px;
+    }
+
+    .game-over-panel button {
+      padding: 10px 18px;
+      border: 2px solid #38ff58;
+      background: #000;
+      color: #38ff58;
+      font: bold 16px monospace;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="game-container">
+      <canvas id="game" width="800" height="600" tabindex="0" autofocus>Your browser does not support canvas.</canvas>
+      <div id="game-over" class="game-over" role="dialog" aria-modal="true" aria-labelledby="game-over-title" hidden>
+        <div class="game-over-panel">
+          <h1 id="game-over-title">GAME OVER</h1>
+          <p>Final score: <span id="final-score">0</span></p>
+          <button id="play-again" type="button">Play Again</button>
+        </div>
+      </div>
+    </div>
+    <footer class="credit">Name: E65Q - Kai Xiang</footer>
+  </div>
+  <script>
+    const canvas = document.getElementById("game");
+    const context = canvas.getContext("2d");
+    const gameOverOverlay = document.getElementById("game-over");
+    const finalScoreElement = document.getElementById("final-score");
+    const playAgainButton = document.getElementById("play-again");
+    const shipPixels = [
+      "....##....",
+      "...####...",
+      "...####...",
+      "..######..",
+      ".########.",
+      "##########",
+      "##########"
+    ];
+    const shipPixelSize = 4;
+    const ship = {
+      width: shipPixels[0].length * shipPixelSize,
+      height: shipPixels.length * shipPixelSize,
+      x: (canvas.width - shipPixels[0].length * shipPixelSize) / 2,
+      y: canvas.height - shipPixels.length * shipPixelSize - 24,
+      speed: 300
+    };
+    const lives = { remaining: 3 };
+    const invaderScores = { squid: 30, crab: 20, octopus: 10 };
+    let score = 0;
+    let gameOver = false;
+    let invulnerabilityRemaining = 0;
+    const playerBullets = [];
+    const enemyBullets = [];
+    const playerBulletSize = { width: 4, height: 12 };
+    const playerBulletSpeed = 420;
+    const enemyBulletSpeed = 220;
+    const enemyFireInterval = 1000;
+    const playerFireInterval = 250;
+    const invaderSize = 32;
+    const bunkerPixelSize = 4;
+    const bunkerPixels = [
+      "....########....",
+      "..############..",
+      ".##############.",
+      "################",
+      "################",
+      "################",
+      "######....######",
+      "#####......#####",
+      "####........####",
+      "####........####"
+    ];
+    const bunkerWidth = bunkerPixels[0].length * bunkerPixelSize;
+    const bunkers = [];
+
+    function resetBunkers() {
+      bunkers.length = 0;
+      for (let index = 0; index < 4; index++) {
+        bunkers.push({
+          x: (index + 1) * canvas.width / 5 - bunkerWidth / 2,
+          y: 360,
+          pixels: bunkerPixels.map((row) => Array.from(row, (pixel) => pixel === "#"))
+        });
+      }
+    }
+
+    resetBunkers();
+    const invaderTypes = {
+      squid: {
+        color: "#4de1ff",
+        frames: [
+          ["00111100", "01111110", "11011011", "11111111", "00111100", "01100110", "11000011", "01000010"],
+          ["00111100", "01111110", "11011011", "11111111", "00111100", "01100110", "01000010", "10000001"]
+        ]
+      },
+      crab: {
+        color: "#ff9f43",
+        frames: [
+          ["01000010", "00111100", "11111111", "11011011", "11111111", "01111110", "01011010", "10000001"],
+          ["10000001", "01000010", "11111111", "11011011", "11111111", "01111110", "00100100", "01000010"]
+        ]
+      },
+      octopus: {
+        color: "#bd83ff",
+        frames: [
+          ["00111100", "01111110", "11111111", "11011011", "11111111", "01111110", "01011010", "11000011"],
+          ["00111100", "01111110", "11111111", "11011011", "11111111", "01111110", "11000011", "01000010"]
+        ]
+      }
+    };
+    const invaders = [];
+    const invaderRowTypes = ["squid", "crab", "octopus"];
+    const invaderColumnSpacing = 80;
+    const invaderStartX = (canvas.width - (invaderSize + 7 * invaderColumnSpacing)) / 2;
+
+    function resetInvaders() {
+      invaders.length = 0;
+      invaderRowTypes.forEach((type, row) => {
+        for (let column = 0; column < 8; column++) {
+          invaders.push({
+            type,
+            frame: 0,
+            x: invaderStartX + column * invaderColumnSpacing,
+            y: 60 + row * 56
+          });
+        }
+      });
+    }
+
+    resetInvaders();
+    const invaderStartingCount = invaders.length;
+    const invaderBaseStepInterval = 500;
+    const invaderMinimumStepInterval = 100;
+    const invaderHorizontalStep = 8;
+    const invaderDropDistance = invaderSize;
+    const keys = { left: false, right: false, fire: false };
+    let invaderDirection = 1;
+    let invaderStepAccumulator = 0;
+    let enemyFireAccumulator = 0;
+    let playerFireCooldown = 0;
+    let nextEnemyShooter = 0;
+    let previousFrame = null;
+
+    canvas.addEventListener("pointerdown", () => canvas.focus());
+
+    function isSpaceKey(event) {
+      return event.code === "Space" || event.key === " " || event.key === "Spacebar";
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (event.code === "ArrowLeft" || event.code === "ArrowRight") {
+        event.preventDefault();
+        keys.left = event.code === "ArrowLeft" || keys.left;
+        keys.right = event.code === "ArrowRight" || keys.right;
+      }
+      if (isSpaceKey(event)) {
+        event.preventDefault();
+        keys.fire = true;
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      if (event.code === "ArrowLeft") keys.left = false;
+      if (event.code === "ArrowRight") keys.right = false;
+      if (isSpaceKey(event)) {
+        event.preventDefault();
+        keys.fire = false;
+      }
+    });
+
+    window.addEventListener("blur", () => {
+      keys.left = false;
+      keys.right = false;
+      keys.fire = false;
+    });
+
+    function endGame() {
+      if (gameOver) return;
+      gameOver = true;
+      keys.left = false;
+      keys.right = false;
+      keys.fire = false;
+      finalScoreElement.textContent = String(score);
+      gameOverOverlay.hidden = false;
+      playAgainButton.focus();
+    }
+
+    function restartGame() {
+      if (!gameOver) return;
+      score = 0;
+      lives.remaining = 3;
+      gameOver = false;
+      invulnerabilityRemaining = 0;
+      playerBullets.length = 0;
+      enemyBullets.length = 0;
+      ship.x = (canvas.width - ship.width) / 2;
+      resetInvaders();
+      resetBunkers();
+      invaderDirection = 1;
+      invaderStepAccumulator = 0;
+      enemyFireAccumulator = 0;
+      playerFireCooldown = 0;
+      nextEnemyShooter = 0;
+      previousFrame = null;
+      keys.left = false;
+      keys.right = false;
+      keys.fire = false;
+      finalScoreElement.textContent = "0";
+      gameOverOverlay.hidden = true;
+      canvas.focus();
+      requestAnimationFrame(animate);
+    }
+
+    playAgainButton.addEventListener("click", restartGame);
+
+    function drawInvader(invader) {
+      const { color, frames } = invaderTypes[invader.type];
+      const pixels = frames[invader.frame];
+      context.fillStyle = color;
+
+      pixels.forEach((row, y) => {
+        for (let x = 0; x < row.length; x++) {
+          if (row[x] === "1") {
+            context.fillRect(invader.x + x * 4, invader.y + y * 4, 4, 4);
+          }
+        }
+      });
+    }
+
+    function firePlayerBullet() {
+      playerBullets.push({
+        x: ship.x + (ship.width - playerBulletSize.width) / 2,
+        y: ship.y - playerBulletSize.height,
+        width: playerBulletSize.width,
+        height: playerBulletSize.height
+      });
+    }
+
+    function fireEnemyBullet() {
+      if (invaders.length === 0) return;
+      const shooter = invaders[nextEnemyShooter % invaders.length];
+      nextEnemyShooter = (nextEnemyShooter + 1) % invaders.length;
+      enemyBullets.push({
+        x: shooter.x + (invaderSize - playerBulletSize.width) / 2,
+        y: shooter.y + invaderSize,
+        width: playerBulletSize.width,
+        height: playerBulletSize.height
+      });
+    }
+
+    function rectanglesOverlap(first, second) {
+      return first.x < second.x + second.width &&
+        first.x + first.width > second.x &&
+        first.y < second.y + second.height &&
+        first.y + first.height > second.y;
+    }
+
+    function bulletHitsInvader(bullet, invader) {
+      const pixels = invaderTypes[invader.type].frames[invader.frame];
+      for (let y = 0; y < pixels.length; y++) {
+        for (let x = 0; x < pixels[y].length; x++) {
+          if (pixels[y][x] === "1" && rectanglesOverlap(bullet, {
+            x: invader.x + x * 4,
+            y: invader.y + y * 4,
+            width: 4,
+            height: 4
+          })) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function bulletHitsShip(bullet) {
+      for (let y = 0; y < shipPixels.length; y++) {
+        for (let x = 0; x < shipPixels[y].length; x++) {
+          if (shipPixels[y][x] === "#" && rectanglesOverlap(bullet, {
+            x: ship.x + x * shipPixelSize,
+            y: ship.y + y * shipPixelSize,
+            width: shipPixelSize,
+            height: shipPixelSize
+          })) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    function damageBunker(bullet) {
+      const bulletCenterX = bullet.x + bullet.width / 2;
+      const bulletCenterY = bullet.y + bullet.height / 2;
+
+      for (const bunker of bunkers) {
+        let impactX = -1;
+        let impactY = -1;
+        let closestImpact = Infinity;
+
+        for (let y = 0; y < bunker.pixels.length; y++) {
+          for (let x = 0; x < bunker.pixels[y].length; x++) {
+            if (!bunker.pixels[y][x]) continue;
+
+            const pixel = {
+              x: bunker.x + x * bunkerPixelSize,
+              y: bunker.y + y * bunkerPixelSize,
+              width: bunkerPixelSize,
+              height: bunkerPixelSize
+            };
+            if (!rectanglesOverlap(bullet, pixel)) continue;
+
+            const dx = pixel.x + bunkerPixelSize / 2 - bulletCenterX;
+            const dy = pixel.y + bunkerPixelSize / 2 - bulletCenterY;
+            const distance = dx * dx + dy * dy;
+            if (distance < closestImpact) {
+              closestImpact = distance;
+              impactX = x;
+              impactY = y;
+            }
+          }
+        }
+
+        if (impactX === -1) continue;
+
+        for (let y = Math.max(0, impactY - 1); y <= Math.min(bunker.pixels.length - 1, impactY + 1); y++) {
+          for (let x = Math.max(0, impactX - 1); x <= Math.min(bunker.pixels[y].length - 1, impactX + 1); x++) {
+            bunker.pixels[y][x] = false;
+          }
+        }
+        return true;
+      }
+
+      return false;
+    }
+
+    function updateBullets(elapsed) {
+      for (let index = playerBullets.length - 1; index >= 0; index--) {
+        const bullet = playerBullets[index];
+        bullet.y -= playerBulletSpeed * elapsed;
+
+        if (damageBunker(bullet)) {
+          playerBullets.splice(index, 1);
+          continue;
+        }
+
+        const hitIndex = invaders.findIndex((invader) => bulletHitsInvader(bullet, invader));
+        if (hitIndex !== -1) {
+          score += invaderScores[invaders[hitIndex].type];
+          invaders.splice(hitIndex, 1);
+          playerBullets.splice(index, 1);
+        } else if (bullet.y + bullet.height < 0) {
+          playerBullets.splice(index, 1);
+        }
+      }
+
+      for (let index = enemyBullets.length - 1; index >= 0; index--) {
+        const bullet = enemyBullets[index];
+        bullet.y += enemyBulletSpeed * elapsed;
+
+        if (damageBunker(bullet)) {
+          enemyBullets.splice(index, 1);
+        } else if (bulletHitsShip(bullet)) {
+          if (invulnerabilityRemaining === 0) {
+            lives.remaining = Math.max(0, lives.remaining - 1);
+            invulnerabilityRemaining = 1;
+            if (lives.remaining === 0) endGame();
+          }
+          enemyBullets.splice(index, 1);
+        } else if (bullet.y > canvas.height) {
+          enemyBullets.splice(index, 1);
+        }
+        if (gameOver) break;
+      }
+    }
+
+    function getInvaderStepInterval() {
+      if (invaders.length === 0) return Infinity;
+      return Math.max(
+        invaderMinimumStepInterval,
+        invaderBaseStepInterval * invaders.length / invaderStartingCount
+      );
+    }
+
+    function advanceInvaders() {
+      if (invaders.length === 0) return;
+      if (invaders.some((invader) => invader.y + invaderSize >= ship.y)) {
+        endGame();
+        return;
+      }
+
+      const leftEdge = Math.min(...invaders.map((invader) => invader.x));
+      const rightEdge = Math.max(...invaders.map((invader) => invader.x + invaderSize));
+      const horizontalDelta = invaderDirection * invaderHorizontalStep;
+      const hitsEdge = leftEdge + horizontalDelta < 0 || rightEdge + horizontalDelta > canvas.width;
+
+      if (hitsEdge) {
+        const bottomEdge = Math.max(...invaders.map((invader) => invader.y + invaderSize));
+        const drop = Math.min(invaderDropDistance, Math.max(0, canvas.height - bottomEdge));
+        invaderDirection *= -1;
+        invaders.forEach((invader) => {
+          invader.y = Math.min(canvas.height - invaderSize, invader.y + drop);
+          invader.frame = (invader.frame + 1) % 2;
+        });
+        if (invaders.some((invader) => invader.y + invaderSize >= ship.y)) endGame();
+        return;
+      }
+
+      invaders.forEach((invader) => {
+        invader.x = Math.max(0, Math.min(canvas.width - invaderSize, invader.x + horizontalDelta));
+        invader.frame = (invader.frame + 1) % 2;
+      });
+    }
+
+    function drawCannon(x, y, pixelSize, color) {
+      context.fillStyle = color;
+      shipPixels.forEach((row, rowIndex) => {
+        for (let column = 0; column < row.length; column++) {
+          if (row[column] === "#") {
+            context.fillRect(
+              x + column * pixelSize,
+              y + rowIndex * pixelSize,
+              pixelSize,
+              pixelSize
+            );
+          }
+        }
+      });
+    }
+
+    function drawGame() {
+      context.fillStyle = "#000";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      invaders.forEach(drawInvader);
+
+      context.fillStyle = "#fff";
+      context.font = "bold 16px monospace";
+      context.textBaseline = "top";
+      context.textAlign = "left";
+      context.fillText("SCORE: " + String(score).padStart(6, "0"), 16, 12);
+      context.fillText("LIVES", 640, 12);
+      for (let life = 0; life < lives.remaining; life++) {
+        drawCannon(700 + life * 28, 13, 2, "#38ff58");
+      }
+
+      context.fillStyle = "#38ff58";
+      bunkers.forEach((bunker) => {
+        bunker.pixels.forEach((row, y) => {
+          row.forEach((solid, x) => {
+            if (solid) {
+              context.fillRect(
+                bunker.x + x * bunkerPixelSize,
+                bunker.y + y * bunkerPixelSize,
+                bunkerPixelSize,
+                bunkerPixelSize
+              );
+            }
+          });
+        });
+      });
+
+      context.fillStyle = "#7fff7f";
+      playerBullets.forEach((bullet) => context.fillRect(bullet.x, bullet.y, bullet.width, bullet.height));
+      context.fillStyle = "#ff6666";
+      enemyBullets.forEach((bullet) => context.fillRect(bullet.x, bullet.y, bullet.width, bullet.height));
+
+      drawCannon(ship.x, ship.y, shipPixelSize, "#38ff58");
+      context.fillRect(16, 584, canvas.width - 32, 2);
+
+    }
+
+    function animate(timestamp) {
+      if (gameOver) return;
+      const frameTime = previousFrame === null ? 0 : timestamp - previousFrame;
+      const elapsed = Math.min(frameTime / 1000, 0.05);
+      previousFrame = timestamp;
+
+      if (keys.left) ship.x -= ship.speed * elapsed;
+      if (keys.right) ship.x += ship.speed * elapsed;
+      ship.x = Math.max(0, Math.min(canvas.width - ship.width, ship.x));
+      invulnerabilityRemaining = Math.max(0, invulnerabilityRemaining - elapsed);
+
+      playerFireCooldown = Math.max(0, playerFireCooldown - elapsed * 1000);
+      if (keys.fire && playerFireCooldown === 0) {
+        firePlayerBullet();
+        playerFireCooldown = playerFireInterval;
+      }
+
+      invaderStepAccumulator += frameTime;
+      const stepInterval = getInvaderStepInterval();
+      if (invaderStepAccumulator >= stepInterval) {
+        invaderStepAccumulator %= stepInterval;
+        advanceInvaders();
+      }
+
+      if (!gameOver) {
+        enemyFireAccumulator += elapsed * 1000;
+        if (enemyFireAccumulator >= enemyFireInterval) {
+          enemyFireAccumulator %= enemyFireInterval;
+          fireEnemyBullet();
+        }
+        updateBullets(elapsed);
+      }
+
+      drawGame();
+
+      if (!gameOver) requestAnimationFrame(animate);
+    }
+
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>
